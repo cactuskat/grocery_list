@@ -154,6 +154,8 @@ class ProductListScreen extends StatefulWidget {
 class _ProductListScreenState extends State<ProductListScreen> {
   late Future<List<Product>> _productsFuture;
   List<Product> savedItems = [];
+  final TextEditingController _searchController = TextEditingController();
+  String searchQuery = '';
 
   @override
   void initState() {
@@ -198,6 +200,26 @@ class _ProductListScreenState extends State<ProductListScreen> {
     await loadSavedItems();
   }
 
+  // Searching List
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void searchProducts() {
+    setState(() {
+      searchQuery = _searchController.text.trim().toLowerCase();
+    });
+  }
+
+  void clearSearch() {
+    setState(() {
+      _searchController.clear();
+      searchQuery = '';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final selectedIds = savedItems.map((item) => item.id).toSet();
@@ -212,48 +234,95 @@ class _ProductListScreenState extends State<ProductListScreen> {
           ),
         ],
       ),
-      body: FutureBuilder<List<Product>>(
-        future: _productsFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          }
-
-          if (!snapshot.hasData) {
-            return const SizedBox.shrink();
-          }
-
-          final products = snapshot.data!;
-
-          final availableProducts = products.where((product) {
-            return !selectedIds.contains(product.id);
-          }).toList();
-
-          return ListView.builder(
-            itemCount: availableProducts.length,
-            itemBuilder: (context, index) {
-              final product = availableProducts[index];
-
-              return ListTile(
-                leading: Image.network(
-                  product.thumbnail,
-                  width: 50,
-                  errorBuilder: (c, e, s) => const Icon(Icons.image),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search groceries',
+                border: const OutlineInputBorder(),
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_searchController.text.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: clearSearch,
+                      ),
+                    IconButton(
+                      icon: const Icon(Icons.search),
+                      onPressed: searchProducts,
+                    ),
+                  ],
                 ),
-                title: Text(product.title),
-                subtitle: Text('\$${product.price.toStringAsFixed(2)}'),
-                trailing: IconButton(
-                  icon: const Icon(Icons.add_circle_outline),
-                  onPressed: () => addToList(product),
-                ),
-              );
-            },
-          );
-        },
+              ),
+              onChanged: (value) {
+                setState(() {});
+              },
+              onSubmitted: (value) {
+                searchProducts();
+              },
+            ),
+          ),
+
+          Expanded(
+            child: FutureBuilder<List<Product>>(
+              future: _productsFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                if (snapshot.hasError) {
+                  return Center(child: Text('Error: ${snapshot.error}'));
+                }
+
+                if (!snapshot.hasData) {
+                  return const SizedBox.shrink();
+                }
+
+                final products = snapshot.data!;
+                final selectedIds = savedItems.map((item) => item.id).toSet();
+
+                final availableProducts = products.where((product) {
+                  final isNotSaved = !selectedIds.contains(product.id);
+                  final matchesSearch = product.title
+                      .toLowerCase()
+                      .contains(searchQuery);
+
+                  return isNotSaved && matchesSearch;
+                }).toList();
+
+                if (availableProducts.isEmpty) {
+                  return const Center(child: Text('No groceries found.'));
+                }
+
+                return ListView.builder(
+                  itemCount: availableProducts.length,
+                  itemBuilder: (context, index) {
+                    final product = availableProducts[index];
+
+                    return ListTile(
+                      leading: Image.network(
+                        product.thumbnail,
+                        width: 50,
+                        errorBuilder: (c, e, s) => const Icon(Icons.image),
+                      ),
+                      title: Text(product.title),
+                      subtitle: Text('\$${product.price.toStringAsFixed(2)}'),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.add_circle_outline),
+                        onPressed: () => addToList(product),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
