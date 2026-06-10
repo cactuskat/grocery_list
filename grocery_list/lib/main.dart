@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -17,13 +16,37 @@ void main() {
 class MainApp extends StatelessWidget {
   const MainApp({super.key});
 
-  @override
-  Widget build(BuildContext context) {
-    return const MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: HomeScreen(),
-    );
-  }
+  // Update your MainApp build method to include the specific CardTheme
+@override
+Widget build(BuildContext context) {
+  return MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.teal,
+        primary: Colors.teal.shade700,
+        secondary: Colors.teal.shade500,
+      ),
+      // Refined CardTheme for a modern, professional look
+      cardTheme: CardThemeData(
+        elevation: 0, // Flat design is more modern
+        color: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.grey.shade200),
+        ),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      ),
+      appBarTheme: const AppBarTheme(
+        centerTitle: true,
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+      ),
+    ),
+    home: const HomeScreen(),
+  );
+}
 }
 
 enum SortOrder {
@@ -186,17 +209,35 @@ class _HomeScreenState extends State<HomeScreen> {
     ];
 
     return Scaffold(
-      body: screens[selectedIndex],
+      body: IndexedStack(
+        index: selectedIndex,
+        children: screens,
+      ),
+      // Sticky bottom navigation bar retained
       bottomNavigationBar: NavigationBar(
         selectedIndex: selectedIndex,
         onDestinationSelected: switchTab,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.store),
+        destinations: [
+          const NavigationDestination(
+            icon: Icon(Icons.storefront_outlined),
+            selectedIcon: Icon(Icons.storefront),
             label: 'Products',
           ),
           NavigationDestination(
-            icon: Icon(Icons.shopping_cart),
+            // We wrap this in a Builder or keep the logic simple 
+            // because HomeScreen will rebuild this whenever refreshCount changes
+            icon: FutureBuilder<List<Product>>(
+              future: GroceryDatabase.instance.getItems(),
+              builder: (context, snapshot) {
+                final count = snapshot.data?.length ?? 0;
+                return Badge(
+                  isLabelVisible: count > 0,
+                  label: Text('$count'),
+                  child: const Icon(Icons.shopping_bag_outlined),
+                );
+              },
+            ),
+            selectedIcon: const Icon(Icons.shopping_bag),
             label: 'My List',
           ),
         ],
@@ -332,7 +373,7 @@ class _ProductListScreenState extends State<ProductListScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('${product.title} added to grocery list.'),
-        duration: const Duration(seconds: 2),
+        duration: const Duration(seconds: 1),
       ),
     );
   }
@@ -362,8 +403,24 @@ class _ProductListScreenState extends State<ProductListScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Groceries'),
+        // Branding: Adding a subtle icon prefix to the title
+        title: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.eco, color: Colors.teal), // Branding icon
+            SizedBox(width: 8),
+            Text('Fieldstone Grocers', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        centerTitle: true,
+        backgroundColor: Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 2,
         actions: [
+          //IconButton(
+          //  icon: const Icon(Icons.shopping_cart),
+          //  onPressed: widget.onGoToGroceryList,
+          //),
           PopupMenuButton<SortOrder>(
             icon: const Icon(Icons.sort),
             onSelected: saveSortPreference,
@@ -378,10 +435,6 @@ class _ProductListScreenState extends State<ProductListScreen> {
               ),
             ],
           ),
-          IconButton(
-            icon: const Icon(Icons.shopping_cart),
-            onPressed: widget.onGoToGroceryList,
-          ),
         ],
       ),
       body: Column(
@@ -389,7 +442,7 @@ class _ProductListScreenState extends State<ProductListScreen> {
           if (isOfflineMode) const OfflineStatusBar(),
           SearchBox(
             controller: _searchController,
-            hintText: 'Search groceries',
+            hintText: 'search products',
             onSearch: searchProducts,
             onClear: clearSearch,
             onTyping: () {
@@ -455,42 +508,58 @@ class _ProductListScreenState extends State<ProductListScreen> {
                 }
 
                 return ListView.builder(
-                  itemCount: availableProducts.length,
-                  itemBuilder: (context, index) {
-                    final product = availableProducts[index];
+                itemCount: availableProducts.length,
+                itemBuilder: (context, index) {
+                final product = availableProducts[index];
 
-                    return Dismissible(
-                      key: ValueKey(product.id),
-                      direction: DismissDirection.startToEnd,
-                      background: Container(
-                        alignment: Alignment.centerLeft,
-                        padding: const EdgeInsets.only(left: 24),
-                        color: Colors.green,
-                        child: const Icon(
-                          Icons.shopping_cart,
-                          color: Colors.white,
-                        ),
-                      ),
-                      onDismissed: (direction) {
-                        addToList(product);
-                      },
-                      child: ListTile(
-                        leading: Image.network(
+                return Dismissible(
+                  key: ValueKey(product.id),
+                  direction: DismissDirection.startToEnd,
+                  background: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.green,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.only(left: 24),
+                    child: const Icon(
+                      Icons.shopping_cart,
+                      color: Colors.white,
+                    ),
+                  ),
+                  onDismissed: (direction) {
+                    addToList(product);
+                  },
+                  child: Card(
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      leading: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(
                           product.thumbnail,
                           width: 50,
-                          errorBuilder: (c, e, s) =>
-                              const Icon(Icons.image),
-                        ),
-                        title: Text(product.title),
-                        subtitle:
-                            Text('\$${product.price.toStringAsFixed(2)}'),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.add_circle_outline),
-                          onPressed: () => addToList(product),
+                          height: 50,
+                          fit: BoxFit.cover,
+                          errorBuilder: (c, e, s) => const Icon(Icons.image),
                         ),
                       ),
-                    );
-                  },
+                      title: Text(
+                        product.title,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        '\$${product.price.toStringAsFixed(2)}',
+                        style: TextStyle(color: Theme.of(context).primaryColor),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.add_circle_outline),
+                        onPressed: () => addToList(product),
+                      ),
+                    ),
+                  ),
+                );
+                },
                 );
               },
             ),
@@ -587,7 +656,7 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('${product.title} moved back to groceries.'),
-        duration: const Duration(seconds: 2),
+        duration: const Duration(seconds: 1),
       ),
     );
   }
@@ -603,7 +672,7 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Grocery list cleared.'),
-        duration: Duration(seconds: 2),
+        duration: Duration(seconds: 1),
       ),
     );
   }
@@ -672,22 +741,20 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Grocery List'),
+        // Branding: Adding a subtle icon prefix to the title
+        title: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.eco, color: Colors.teal), // Branding icon
+            SizedBox(width: 8),
+            Text('Fieldstone Grocers', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        centerTitle: true,
+        backgroundColor: Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 2,
         actions: [
-          PopupMenuButton<SortOrder>(
-            icon: const Icon(Icons.sort),
-            onSelected: saveSortPreference,
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: SortOrder.alphabetical,
-                child: Text('Alphabetical'),
-              ),
-              PopupMenuItem(
-                value: SortOrder.price,
-                child: Text('Lowest Price'),
-              ),
-            ],
-          ),
           IconButton(
             icon: const Icon(Icons.delete_sweep),
             tooltip: 'Clear All',
@@ -722,78 +789,117 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
                     );
                   },
           ),
+          PopupMenuButton<SortOrder>(
+            icon: const Icon(Icons.sort),
+            onSelected: saveSortPreference,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: SortOrder.alphabetical,
+                child: Text('Alphabetical'),
+              ),
+              PopupMenuItem(
+                value: SortOrder.price,
+                child: Text('Lowest Price'),
+              ),
+            ],
+          ),
         ],
       ),
-      body: isLoading
-          ? const GroceryListSkeleton()
-          : errorMessage != null
-              ? ErrorRetryMessage(
-                  message: errorMessage!,
-                  onRetry: loadGroceryItems,
-                )
-              : Column(
-                  children: [
-                    SearchBox(
-                      controller: _searchController,
-                      hintText: 'Search your grocery list',
-                      onSearch: searchGroceryList,
-                      onClear: clearSearch,
-                      onTyping: () {
-                        setState(() {});
-                      },
-                    ),
-                    Expanded(
-                      child: groceryItems.isEmpty
-                          ? EmptyGroceryListMessage(
-                              onGoToProducts: widget.onGoToProducts,
-                            )
-                          : filteredItems.isEmpty && searchQuery.isNotEmpty
-                              ? const Center(
-                                  child: Text('No items match your search.'),
-                                )
-                              : ListView.builder(
-                                  itemCount: filteredItems.length,
-                                  itemBuilder: (context, index) {
-                                    final product = filteredItems[index];
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: isLoading
+            ? const GroceryListSkeleton(key: ValueKey('skeleton'))
+            : errorMessage != null
+                ? ErrorRetryMessage(
+                    key: const ValueKey('error'),
+                    message: errorMessage!,
+                    onRetry: loadGroceryItems,
+                  )
+                : Column(
+                    key: const ValueKey('list_column'),
+                    children: [
+                      SearchBox(
+                        controller: _searchController,
+                        hintText: 'search grocery list',
+                        onSearch: searchGroceryList,
+                        onClear: clearSearch,
+                        onTyping: () {
+                          setState(() {});
+                        },
+                      ),
+                      Expanded(
+                        child: groceryItems.isEmpty
+                            ? EmptyGroceryListMessage(
+                                onGoToProducts: widget.onGoToProducts,
+                              )
+                            : filteredItems.isEmpty && searchQuery.isNotEmpty
+                                ? const Center(
+                                    child: Text('No items match your search.'),
+                                  )
+                                : ListView.builder(
+                                    itemCount: filteredItems.length,
+                                    itemBuilder: (context, index) {
+                                      final product = filteredItems[index];
 
-                                    return Dismissible(
-                                      key: ValueKey(product.id),
-                                      direction: DismissDirection.endToStart,
-                                      background: Container(
-                                        alignment: Alignment.centerRight,
-                                        padding:
-                                            const EdgeInsets.only(right: 24),
-                                        color: Colors.red,
-                                        child: const Icon(
-                                          Icons.undo,
-                                          color: Colors.white,
+                                      return Dismissible(
+                                        key: ValueKey(product.id),
+                                        direction: DismissDirection.endToStart,
+                                        background: Container(
+                                          margin: const EdgeInsets.symmetric(
+                                              horizontal: 16, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: Colors.red,
+                                            borderRadius: BorderRadius.circular(16),
+                                          ),
+                                          alignment: Alignment.centerRight,
+                                          padding: const EdgeInsets.only(right: 24),
+                                          child: const Icon(
+                                            Icons.undo,
+                                            color: Colors.white,
+                                          ),
                                         ),
-                                      ),
-                                      onDismissed: (direction) {
-                                        removeItem(product);
-                                      },
-                                      child: CheckboxListTile(
-                                        value: false,
-                                        title: Text(product.title),
-                                        subtitle: Text(
-                                          '\$${product.price.toStringAsFixed(2)}',
-                                        ),
-                                        secondary: Image.network(
-                                          product.thumbnail,
-                                          width: 50,
-                                          errorBuilder: (c, e, s) =>
-                                              const Icon(Icons.image),
-                                        ),
-                                        onChanged: (value) {
+                                        onDismissed: (direction) {
                                           removeItem(product);
                                         },
-                                      ),
-                                    );
-                                  },
-                                ),
-                    ),
-                  ],
-                ),
+                                        child: Card(
+                                          child: CheckboxListTile(
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                                    horizontal: 16, vertical: 4),
+                                            value: false,
+                                            title: Text(
+                                              product.title,
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.w600),
+                                            ),
+                                            subtitle: Text(
+                                              '\$${product.price.toStringAsFixed(2)}',
+                                              style: TextStyle(
+                                                  color: Theme.of(context).primaryColor),
+                                            ),
+                                            secondary: ClipRRect(
+                                              borderRadius: BorderRadius.circular(8),
+                                              child: Image.network(
+                                                product.thumbnail,
+                                                width: 50,
+                                                height: 50,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (c, e, s) =>
+                                                    const Icon(Icons.image),
+                                              ),
+                                            ),
+                                            onChanged: (value) {
+                                              removeItem(product);
+                                            },
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                      ),
+                    ],
+                  ),
+      ),
     );
   }
 }
@@ -816,34 +922,39 @@ class SearchBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(12),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
       child: TextField(
         controller: controller,
         decoration: InputDecoration(
           hintText: hintText,
-          border: const OutlineInputBorder(),
-          suffixIcon: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (controller.text.isNotEmpty)
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: onClear,
-                ),
-              IconButton(
-                icon: const Icon(Icons.search),
-                onPressed: onSearch,
-              ),
-            ],
+          filled: true,
+          fillColor: const Color.fromARGB(255, 255, 255, 255),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(30),
+            borderSide: BorderSide.none,
           ),
+          prefixIcon: const Icon(Icons.search, color: Colors.grey),
+          suffixIcon: controller.text.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.clear, color: Colors.grey),
+                  onPressed: onClear,
+                )
+              : null,
         ),
-        onChanged: (value) {
-          onTyping();
-        },
-        onSubmitted: (value) {
-          onSearch();
-        },
+        onChanged: (value) => onTyping(),
+        onSubmitted: (value) => onSearch(),
       ),
     );
   }
