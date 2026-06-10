@@ -295,8 +295,22 @@ class _ProductListScreenState extends State<ProductListScreen> {
                   return isNotSaved && matchesSearch;
                 }).toList();
 
+                if (products.isEmpty) {
+                  return const Center(
+                    child: Text('No grocery products were returned.'),
+                  );
+                }
+
+                if (availableProducts.isEmpty && searchQuery.isNotEmpty) {
+                  return const Center(
+                    child: Text('No results match your search.'),
+                  );
+                }
+
                 if (availableProducts.isEmpty) {
-                  return const Center(child: Text('No groceries found.'));
+                  return const Center(
+                    child: Text('No available groceries right now.'),
+                  );
                 }
 
                 return ListView.builder(
