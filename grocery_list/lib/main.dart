@@ -21,7 +21,7 @@ class MainApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return const MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: ProductListScreen(),
+      home: HomeScreen(),
     );
   }
 }
@@ -109,11 +109,7 @@ class GroceryDatabase {
     ''');
   }
 
-  Future<void> _onUpgrade(
-    Database db,
-    int oldVersion,
-    int newVersion,
-  ) async {
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     await db.execute('DROP TABLE IF EXISTS grocery_items');
     await _createDB(db, newVersion);
   }
@@ -130,7 +126,6 @@ class GroceryDatabase {
 
   Future<List<Product>> getItems() async {
     final db = await database;
-
     final result = await db.query('grocery_items');
 
     return result.map((map) => Product.fromMap(map)).toList();
@@ -148,13 +143,79 @@ class GroceryDatabase {
 
   Future<void> clearAllItems() async {
     final db = await database;
-
     await db.delete('grocery_items');
   }
 }
 
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int selectedIndex = 0;
+  int refreshCount = 0;
+
+  void switchTab(int index) {
+    setState(() {
+      selectedIndex = index;
+    });
+  }
+
+  void refreshBothScreens() {
+    setState(() {
+      refreshCount++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screens = [
+      ProductListScreen(
+        refreshCount: refreshCount,
+        onDataChanged: refreshBothScreens,
+        onGoToGroceryList: () => switchTab(1),
+      ),
+      GroceryListScreen(
+        refreshCount: refreshCount,
+        onDataChanged: refreshBothScreens,
+        onGoToProducts: () => switchTab(0),
+      ),
+    ];
+
+    return Scaffold(
+      body: screens[selectedIndex],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: selectedIndex,
+        onDestinationSelected: switchTab,
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.store),
+            label: 'Products',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.shopping_cart),
+            label: 'My List',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class ProductListScreen extends StatefulWidget {
-  const ProductListScreen({super.key});
+  final int refreshCount;
+  final VoidCallback onDataChanged;
+  final VoidCallback onGoToGroceryList;
+
+  const ProductListScreen({
+    super.key,
+    required this.refreshCount,
+    required this.onDataChanged,
+    required this.onGoToGroceryList,
+  });
 
   @override
   State<ProductListScreen> createState() => _ProductListScreenState();
@@ -169,6 +230,8 @@ class _ProductListScreenState extends State<ProductListScreen> {
   String searchQuery = '';
   SortOrder currentSort = SortOrder.alphabetical;
 
+  bool isOfflineMode = false;
+
   @override
   void initState() {
     super.initState();
@@ -179,6 +242,15 @@ class _ProductListScreenState extends State<ProductListScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant ProductListScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.refreshCount != widget.refreshCount) {
+      loadSavedItems();
+    }
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
@@ -186,20 +258,39 @@ class _ProductListScreenState extends State<ProductListScreen> {
 
   Future<List<Product>> fetchProducts() async {
     final url = Uri.parse('https://dummyjson.com/products/category/groceries');
-    final response = await http.get(url);
 
-    if (response.statusCode == 200) {
-      final body = jsonDecode(response.body);
-      final List productsJson = body['products'];
+    try {
+      final response = await http.get(url);
 
-      return productsJson.map((json) => Product.fromJson(json)).toList();
-    } else {
-      throw Exception('Failed to load products.');
+      if (response.statusCode == 200) {
+        if (mounted) {
+          setState(() {
+            isOfflineMode = false;
+          });
+        }
+
+        final body = jsonDecode(response.body);
+        final List productsJson = body['products'];
+
+        return productsJson.map((json) => Product.fromJson(json)).toList();
+      } else {
+        throw Exception('Failed to load products.');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          isOfflineMode = true;
+        });
+      }
+
+      rethrow;
     }
   }
 
   Future<void> loadSavedItems() async {
     final items = await GroceryDatabase.instance.getItems();
+
+    if (!mounted) return;
 
     setState(() {
       savedItems = items;
@@ -208,8 +299,9 @@ class _ProductListScreenState extends State<ProductListScreen> {
 
   Future<void> loadSortPreference() async {
     final prefs = await SharedPreferences.getInstance();
-
     final savedSort = prefs.getString('sortOrder') ?? 'alphabetical';
+
+    if (!mounted) return;
 
     setState(() {
       currentSort =
@@ -222,6 +314,8 @@ class _ProductListScreenState extends State<ProductListScreen> {
 
     await prefs.setString('sortOrder', sortOrder.name);
 
+    if (!mounted) return;
+
     setState(() {
       currentSort = sortOrder;
     });
@@ -230,6 +324,8 @@ class _ProductListScreenState extends State<ProductListScreen> {
   Future<void> addToList(Product product) async {
     await GroceryDatabase.instance.addItem(product);
     await loadSavedItems();
+
+    widget.onDataChanged();
 
     if (!mounted) return;
 
@@ -260,16 +356,6 @@ class _ProductListScreenState extends State<ProductListScreen> {
     });
   }
 
-  void openGroceryList() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const GroceryListScreen(),
-      ),
-    );
-
-    await loadSavedItems();
-  }
-
   @override
   Widget build(BuildContext context) {
     final selectedIds = savedItems.map((item) => item.id).toSet();
@@ -294,41 +380,21 @@ class _ProductListScreenState extends State<ProductListScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.shopping_cart),
-            onPressed: openGroceryList,
+            onPressed: widget.onGoToGroceryList,
           ),
         ],
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Search groceries',
-                border: const OutlineInputBorder(),
-                suffixIcon: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_searchController.text.isNotEmpty)
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: clearSearch,
-                      ),
-                    IconButton(
-                      icon: const Icon(Icons.search),
-                      onPressed: searchProducts,
-                    ),
-                  ],
-                ),
-              ),
-              onChanged: (value) {
-                setState(() {});
-              },
-              onSubmitted: (value) {
-                searchProducts();
-              },
-            ),
+          if (isOfflineMode) const OfflineStatusBar(),
+          SearchBox(
+            controller: _searchController,
+            hintText: 'Search groceries',
+            onSearch: searchProducts,
+            onClear: clearSearch,
+            onTyping: () {
+              setState(() {});
+            },
           ),
           Expanded(
             child: FutureBuilder<List<Product>>(
@@ -394,31 +460,36 @@ class _ProductListScreenState extends State<ProductListScreen> {
                     final product = availableProducts[index];
 
                     return Dismissible(
-  key: ValueKey(product.id),
-  direction: DismissDirection.startToEnd,
-  background: Container(
-    alignment: Alignment.centerLeft,
-    padding: const EdgeInsets.only(left: 24),
-    color: Colors.green,
-    child: const Icon(Icons.shopping_cart, color: Colors.white),
-  ),
-  onDismissed: (direction) {
-    addToList(product);
-  },
-  child: ListTile(
-    leading: Image.network(
-      product.thumbnail,
-      width: 50,
-      errorBuilder: (c, e, s) => const Icon(Icons.image),
-    ),
-    title: Text(product.title),
-    subtitle: Text('\$${product.price.toStringAsFixed(2)}'),
-    trailing: IconButton(
-      icon: const Icon(Icons.add_circle_outline),
-      onPressed: () => addToList(product),
-    ),
-  ),
-);
+                      key: ValueKey(product.id),
+                      direction: DismissDirection.startToEnd,
+                      background: Container(
+                        alignment: Alignment.centerLeft,
+                        padding: const EdgeInsets.only(left: 24),
+                        color: Colors.green,
+                        child: const Icon(
+                          Icons.shopping_cart,
+                          color: Colors.white,
+                        ),
+                      ),
+                      onDismissed: (direction) {
+                        addToList(product);
+                      },
+                      child: ListTile(
+                        leading: Image.network(
+                          product.thumbnail,
+                          width: 50,
+                          errorBuilder: (c, e, s) =>
+                              const Icon(Icons.image),
+                        ),
+                        title: Text(product.title),
+                        subtitle:
+                            Text('\$${product.price.toStringAsFixed(2)}'),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.add_circle_outline),
+                          onPressed: () => addToList(product),
+                        ),
+                      ),
+                    );
                   },
                 );
               },
@@ -431,7 +502,16 @@ class _ProductListScreenState extends State<ProductListScreen> {
 }
 
 class GroceryListScreen extends StatefulWidget {
-  const GroceryListScreen({super.key});
+  final int refreshCount;
+  final VoidCallback onDataChanged;
+  final VoidCallback onGoToProducts;
+
+  const GroceryListScreen({
+    super.key,
+    required this.refreshCount,
+    required this.onDataChanged,
+    required this.onGoToProducts,
+  });
 
   @override
   State<GroceryListScreen> createState() => _GroceryListScreenState();
@@ -445,10 +525,23 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
   String? errorMessage;
   bool isLoading = true;
 
+  SortOrder currentSort = SortOrder.alphabetical;
+
   @override
   void initState() {
     super.initState();
+
     loadGroceryItems();
+    loadSortPreference();
+  }
+
+  @override
+  void didUpdateWidget(covariant GroceryListScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.refreshCount != widget.refreshCount) {
+      loadGroceryItems();
+    }
   }
 
   @override
@@ -487,6 +580,8 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
     await GroceryDatabase.instance.removeItem(product.id);
     await loadGroceryItems();
 
+    widget.onDataChanged();
+
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -500,6 +595,50 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
   Future<void> clearAllItems() async {
     await GroceryDatabase.instance.clearAllItems();
     await loadGroceryItems();
+
+    widget.onDataChanged();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Grocery list cleared.'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> loadSortPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final savedSort =
+        prefs.getString('grocerySortOrder') ??
+        'alphabetical';
+
+    if (!mounted) return;
+
+    setState(() {
+      currentSort = savedSort == 'price'
+          ? SortOrder.price
+          : SortOrder.alphabetical;
+    });
+  }
+
+  Future<void> saveSortPreference(
+    SortOrder sortOrder,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    await prefs.setString(
+      'grocerySortOrder',
+      sortOrder.name,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      currentSort = sortOrder;
+    });
   }
 
   void searchGroceryList() {
@@ -521,10 +660,34 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
       return product.title.toLowerCase().contains(searchQuery);
     }).toList();
 
+    if (currentSort == SortOrder.alphabetical) {
+      filteredItems.sort(
+        (a, b) => a.title.compareTo(b.title),
+      );
+    } else {
+      filteredItems.sort(
+        (a, b) => a.price.compareTo(b.price),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('My Grocery List'),
         actions: [
+          PopupMenuButton<SortOrder>(
+            icon: const Icon(Icons.sort),
+            onSelected: saveSortPreference,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: SortOrder.alphabetical,
+                child: Text('Alphabetical'),
+              ),
+              PopupMenuItem(
+                value: SortOrder.price,
+                child: Text('Lowest Price'),
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.delete_sweep),
             tooltip: 'Clear All',
@@ -570,39 +733,20 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
                 )
               : Column(
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          hintText: 'Search your grocery list',
-                          border: const OutlineInputBorder(),
-                          suffixIcon: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (_searchController.text.isNotEmpty)
-                                IconButton(
-                                  icon: const Icon(Icons.close),
-                                  onPressed: clearSearch,
-                                ),
-                              IconButton(
-                                icon: const Icon(Icons.search),
-                                onPressed: searchGroceryList,
-                              ),
-                            ],
-                          ),
-                        ),
-                        onChanged: (value) {
-                          setState(() {});
-                        },
-                        onSubmitted: (value) {
-                          searchGroceryList();
-                        },
-                      ),
+                    SearchBox(
+                      controller: _searchController,
+                      hintText: 'Search your grocery list',
+                      onSearch: searchGroceryList,
+                      onClear: clearSearch,
+                      onTyping: () {
+                        setState(() {});
+                      },
                     ),
                     Expanded(
                       child: groceryItems.isEmpty
-                          ? const EmptyGroceryListMessage()
+                          ? EmptyGroceryListMessage(
+                              onGoToProducts: widget.onGoToProducts,
+                            )
                           : filteredItems.isEmpty && searchQuery.isNotEmpty
                               ? const Center(
                                   child: Text('No items match your search.'),
@@ -617,9 +761,13 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
                                       direction: DismissDirection.endToStart,
                                       background: Container(
                                         alignment: Alignment.centerRight,
-                                        padding: const EdgeInsets.only(right: 24),
+                                        padding:
+                                            const EdgeInsets.only(right: 24),
                                         color: Colors.red,
-                                        child: const Icon(Icons.undo, color: Colors.white),
+                                        child: const Icon(
+                                          Icons.undo,
+                                          color: Colors.white,
+                                        ),
                                       ),
                                       onDismissed: (direction) {
                                         removeItem(product);
@@ -633,7 +781,8 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
                                         secondary: Image.network(
                                           product.thumbnail,
                                           width: 50,
-                                          errorBuilder: (c, e, s) => const Icon(Icons.image),
+                                          errorBuilder: (c, e, s) =>
+                                              const Icon(Icons.image),
                                         ),
                                         onChanged: (value) {
                                           removeItem(product);
@@ -649,17 +798,84 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
   }
 }
 
-class EmptyGroceryListMessage extends StatelessWidget {
-  const EmptyGroceryListMessage({super.key});
+class SearchBox extends StatelessWidget {
+  final TextEditingController controller;
+  final String hintText;
+  final VoidCallback onSearch;
+  final VoidCallback onClear;
+  final VoidCallback onTyping;
+
+  const SearchBox({
+    super.key,
+    required this.controller,
+    required this.hintText,
+    required this.onSearch,
+    required this.onClear,
+    required this.onTyping,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: TextField(
+        controller: controller,
+        decoration: InputDecoration(
+          hintText: hintText,
+          border: const OutlineInputBorder(),
+          suffixIcon: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (controller.text.isNotEmpty)
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: onClear,
+                ),
+              IconButton(
+                icon: const Icon(Icons.search),
+                onPressed: onSearch,
+              ),
+            ],
+          ),
+        ),
+        onChanged: (value) {
+          onTyping();
+        },
+        onSubmitted: (value) {
+          onSearch();
+        },
+      ),
+    );
+  }
+}
+
+class EmptyGroceryListMessage extends StatelessWidget {
+  final VoidCallback onGoToProducts;
+
+  const EmptyGroceryListMessage({
+    super.key,
+    required this.onGoToProducts,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
       child: Padding(
-        padding: EdgeInsets.all(24),
-        child: Text(
-          'Welcome! Your grocery list is empty.\n\nGo back to the groceries page and tap + to add your first item.',
-          textAlign: TextAlign.center,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Welcome! Your grocery list is empty.\n\nGo to the products page and tap + to add your first item.',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: onGoToProducts,
+              icon: const Icon(Icons.store),
+              label: const Text('Browse Products'),
+            ),
+          ],
         ),
       ),
     );
@@ -751,6 +967,24 @@ class ErrorRetryMessage extends StatelessWidget {
             label: const Text('Retry'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class OfflineStatusBar extends StatelessWidget {
+  const OfflineStatusBar({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Colors.orange,
+      padding: const EdgeInsets.all(8),
+      child: const Text(
+        'Offline mode: showing saved grocery list only.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Colors.white),
       ),
     );
   }
