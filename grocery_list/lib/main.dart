@@ -230,6 +230,15 @@ class _ProductListScreenState extends State<ProductListScreen> {
   Future<void> addToList(Product product) async {
     await GroceryDatabase.instance.addItem(product);
     await loadSavedItems();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${product.title} added to grocery list.'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   void retryFetchProducts() {
@@ -384,19 +393,32 @@ class _ProductListScreenState extends State<ProductListScreen> {
                   itemBuilder: (context, index) {
                     final product = availableProducts[index];
 
-                    return ListTile(
-                      leading: Image.network(
-                        product.thumbnail,
-                        width: 50,
-                        errorBuilder: (c, e, s) => const Icon(Icons.image),
-                      ),
-                      title: Text(product.title),
-                      subtitle: Text('\$${product.price.toStringAsFixed(2)}'),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.add_circle_outline),
-                        onPressed: () => addToList(product),
-                      ),
-                    );
+                    return Dismissible(
+  key: ValueKey(product.id),
+  direction: DismissDirection.startToEnd,
+  background: Container(
+    alignment: Alignment.centerLeft,
+    padding: const EdgeInsets.only(left: 24),
+    color: Colors.green,
+    child: const Icon(Icons.shopping_cart, color: Colors.white),
+  ),
+  onDismissed: (direction) {
+    addToList(product);
+  },
+  child: ListTile(
+    leading: Image.network(
+      product.thumbnail,
+      width: 50,
+      errorBuilder: (c, e, s) => const Icon(Icons.image),
+    ),
+    title: Text(product.title),
+    subtitle: Text('\$${product.price.toStringAsFixed(2)}'),
+    trailing: IconButton(
+      icon: const Icon(Icons.add_circle_outline),
+      onPressed: () => addToList(product),
+    ),
+  ),
+);
                   },
                 );
               },
@@ -464,6 +486,15 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
   Future<void> removeItem(Product product) async {
     await GroceryDatabase.instance.removeItem(product.id);
     await loadGroceryItems();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${product.title} moved back to groceries.'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> clearAllItems() async {
@@ -581,21 +612,33 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
                                   itemBuilder: (context, index) {
                                     final product = filteredItems[index];
 
-                                    return CheckboxListTile(
-                                      value: false,
-                                      title: Text(product.title),
-                                      subtitle: Text(
-                                        '\$${product.price.toStringAsFixed(2)}',
+                                    return Dismissible(
+                                      key: ValueKey(product.id),
+                                      direction: DismissDirection.endToStart,
+                                      background: Container(
+                                        alignment: Alignment.centerRight,
+                                        padding: const EdgeInsets.only(right: 24),
+                                        color: Colors.red,
+                                        child: const Icon(Icons.undo, color: Colors.white),
                                       ),
-                                      secondary: Image.network(
-                                        product.thumbnail,
-                                        width: 50,
-                                        errorBuilder: (c, e, s) =>
-                                            const Icon(Icons.image),
-                                      ),
-                                      onChanged: (value) {
+                                      onDismissed: (direction) {
                                         removeItem(product);
                                       },
+                                      child: CheckboxListTile(
+                                        value: false,
+                                        title: Text(product.title),
+                                        subtitle: Text(
+                                          '\$${product.price.toStringAsFixed(2)}',
+                                        ),
+                                        secondary: Image.network(
+                                          product.thumbnail,
+                                          width: 50,
+                                          errorBuilder: (c, e, s) => const Icon(Icons.image),
+                                        ),
+                                        onChanged: (value) {
+                                          removeItem(product);
+                                        },
+                                      ),
                                     );
                                   },
                                 ),
