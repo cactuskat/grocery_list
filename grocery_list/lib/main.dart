@@ -1,9 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-import 'dart:convert';
 
 void main() {
   sqfliteFfiInit();
@@ -17,11 +19,17 @@ class MainApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(home: ProductListScreen());
+    return const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: ProductListScreen(),
+    );
   }
 }
 
-// ---------------- PRODUCT MODEL ----------------
+enum SortOrder {
+  alphabetical,
+  price,
+}
 
 class Product {
   final int id;
@@ -64,8 +72,6 @@ class Product {
   }
 }
 
-// ---------------- DATABASE ----------------
-
 class GroceryDatabase {
   static final GroceryDatabase instance = GroceryDatabase._init();
   static Database? _database;
@@ -83,12 +89,12 @@ class GroceryDatabase {
     final dbPath = await getDatabasesPath();
     final path = p.join(dbPath, fileName);
 
-  return await openDatabase(
-    path,
-    version: 2,
-    onCreate: _createDB,
-    onUpgrade: _onUpgrade,
-  );
+    return await openDatabase(
+      path,
+      version: 2,
+      onCreate: _createDB,
+      onUpgrade: _onUpgrade,
+    );
   }
 
   Future<void> _createDB(Database db, int version) async {
@@ -109,7 +115,6 @@ class GroceryDatabase {
     int newVersion,
   ) async {
     await db.execute('DROP TABLE IF EXISTS grocery_items');
-
     await _createDB(db, newVersion);
   }
 
@@ -140,9 +145,13 @@ class GroceryDatabase {
       whereArgs: [apiId],
     );
   }
-}
 
-// ---------------- SELECTION PAGE ----------------
+  Future<void> clearAllItems() async {
+    final db = await database;
+
+    await db.delete('grocery_items');
+  }
+}
 
 class ProductListScreen extends StatefulWidget {
   const ProductListScreen({super.key});
@@ -153,15 +162,26 @@ class ProductListScreen extends StatefulWidget {
 
 class _ProductListScreenState extends State<ProductListScreen> {
   late Future<List<Product>> _productsFuture;
-  List<Product> savedItems = [];
+
   final TextEditingController _searchController = TextEditingController();
+
+  List<Product> savedItems = [];
   String searchQuery = '';
+  SortOrder currentSort = SortOrder.alphabetical;
 
   @override
   void initState() {
     super.initState();
+
     _productsFuture = fetchProducts();
     loadSavedItems();
+    loadSortPreference();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<List<Product>> fetchProducts() async {
@@ -171,9 +191,10 @@ class _ProductListScreenState extends State<ProductListScreen> {
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body);
       final List productsJson = body['products'];
+
       return productsJson.map((json) => Product.fromJson(json)).toList();
     } else {
-      throw Exception('Failed to load products (${response.statusCode})');
+      throw Exception('Failed to load products.');
     }
   }
 
@@ -185,26 +206,36 @@ class _ProductListScreenState extends State<ProductListScreen> {
     });
   }
 
+  Future<void> loadSortPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final savedSort = prefs.getString('sortOrder') ?? 'alphabetical';
+
+    setState(() {
+      currentSort =
+          savedSort == 'price' ? SortOrder.price : SortOrder.alphabetical;
+    });
+  }
+
+  Future<void> saveSortPreference(SortOrder sortOrder) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    await prefs.setString('sortOrder', sortOrder.name);
+
+    setState(() {
+      currentSort = sortOrder;
+    });
+  }
+
   Future<void> addToList(Product product) async {
     await GroceryDatabase.instance.addItem(product);
     await loadSavedItems();
   }
 
-  void openGroceryList() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const GroceryListScreen(),
-      ),
-    );
-
-    await loadSavedItems();
-  }
-
-  // Searching List
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
+  void retryFetchProducts() {
+    setState(() {
+      _productsFuture = fetchProducts();
+    });
   }
 
   void searchProducts() {
@@ -220,6 +251,16 @@ class _ProductListScreenState extends State<ProductListScreen> {
     });
   }
 
+  void openGroceryList() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const GroceryListScreen(),
+      ),
+    );
+
+    await loadSavedItems();
+  }
+
   @override
   Widget build(BuildContext context) {
     final selectedIds = savedItems.map((item) => item.id).toSet();
@@ -228,6 +269,20 @@ class _ProductListScreenState extends State<ProductListScreen> {
       appBar: AppBar(
         title: const Text('Groceries'),
         actions: [
+          PopupMenuButton<SortOrder>(
+            icon: const Icon(Icons.sort),
+            onSelected: saveSortPreference,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: SortOrder.alphabetical,
+                child: Text('Alphabetical'),
+              ),
+              PopupMenuItem(
+                value: SortOrder.price,
+                child: Text('Lowest Price'),
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.shopping_cart),
             onPressed: openGroceryList,
@@ -266,17 +321,20 @@ class _ProductListScreenState extends State<ProductListScreen> {
               },
             ),
           ),
-
           Expanded(
             child: FutureBuilder<List<Product>>(
               future: _productsFuture,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
+                  return const ProductSkeleton();
                 }
 
                 if (snapshot.hasError) {
-                  return Center(child: Text('Error: ${snapshot.error}'));
+                  return ErrorRetryMessage(
+                    message:
+                        'Could not load groceries. Please check your connection.',
+                    onRetry: retryFetchProducts,
+                  );
                 }
 
                 if (!snapshot.hasData) {
@@ -284,16 +342,24 @@ class _ProductListScreenState extends State<ProductListScreen> {
                 }
 
                 final products = snapshot.data!;
-                final selectedIds = savedItems.map((item) => item.id).toSet();
 
                 final availableProducts = products.where((product) {
                   final isNotSaved = !selectedIds.contains(product.id);
-                  final matchesSearch = product.title
-                      .toLowerCase()
-                      .contains(searchQuery);
+                  final matchesSearch =
+                      product.title.toLowerCase().contains(searchQuery);
 
                   return isNotSaved && matchesSearch;
                 }).toList();
+
+                if (currentSort == SortOrder.alphabetical) {
+                  availableProducts.sort(
+                    (a, b) => a.title.compareTo(b.title),
+                  );
+                } else {
+                  availableProducts.sort(
+                    (a, b) => a.price.compareTo(b.price),
+                  );
+                }
 
                 if (products.isEmpty) {
                   return const Center(
@@ -342,8 +408,6 @@ class _ProductListScreenState extends State<ProductListScreen> {
   }
 }
 
-// ---------------- GROCERY LIST PAGE ----------------
-
 class GroceryListScreen extends StatefulWidget {
   const GroceryListScreen({super.key});
 
@@ -352,7 +416,12 @@ class GroceryListScreen extends StatefulWidget {
 }
 
 class _GroceryListScreenState extends State<GroceryListScreen> {
+  final TextEditingController _searchController = TextEditingController();
+
   List<Product> groceryItems = [];
+  String searchQuery = '';
+  String? errorMessage;
+  bool isLoading = true;
 
   @override
   void initState() {
@@ -360,12 +429,36 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
     loadGroceryItems();
   }
 
-  Future<void> loadGroceryItems() async {
-    final items = await GroceryDatabase.instance.getItems();
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
+  Future<void> loadGroceryItems() async {
     setState(() {
-      groceryItems = items;
+      isLoading = true;
+      errorMessage = null;
     });
+
+    try {
+      final items = await GroceryDatabase.instance.getItems();
+
+      if (!mounted) return;
+
+      setState(() {
+        groceryItems = items;
+        isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        groceryItems = [];
+        errorMessage = 'Could not load your grocery list.';
+        isLoading = false;
+      });
+    }
   }
 
   Future<void> removeItem(Product product) async {
@@ -373,34 +466,249 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
     await loadGroceryItems();
   }
 
+  Future<void> clearAllItems() async {
+    await GroceryDatabase.instance.clearAllItems();
+    await loadGroceryItems();
+  }
+
+  void searchGroceryList() {
+    setState(() {
+      searchQuery = _searchController.text.trim().toLowerCase();
+    });
+  }
+
+  void clearSearch() {
+    setState(() {
+      _searchController.clear();
+      searchQuery = '';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final filteredItems = groceryItems.where((product) {
+      return product.title.toLowerCase().contains(searchQuery);
+    }).toList();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('My Grocery List'),
-      ),
-      body: groceryItems.isEmpty
-          ? const Center(child: Text('Your list is empty.'))
-          : ListView.builder(
-              itemCount: groceryItems.length,
-              itemBuilder: (context, index) {
-                final product = groceryItems[index];
-
-                return CheckboxListTile(
-                  value: false,
-                  title: Text(product.title),
-                  subtitle: Text('\$${product.price.toStringAsFixed(2)}'),
-                  secondary: Image.network(
-                    product.thumbnail,
-                    width: 50,
-                    errorBuilder: (c, e, s) => const Icon(Icons.image),
-                  ),
-                  onChanged: (value) {
-                    removeItem(product);
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_sweep),
+            tooltip: 'Clear All',
+            onPressed: groceryItems.isEmpty
+                ? null
+                : () {
+                    showDialog(
+                      context: context,
+                      builder: (context) {
+                        return AlertDialog(
+                          title: const Text('Clear Grocery List'),
+                          content: const Text(
+                            'Remove all items from your grocery list?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () {
+                                Navigator.pop(context);
+                              },
+                              child: const Text('Cancel'),
+                            ),
+                            ElevatedButton(
+                              onPressed: () async {
+                                Navigator.pop(context);
+                                await clearAllItems();
+                              },
+                              child: const Text('Clear All'),
+                            ),
+                          ],
+                        );
+                      },
+                    );
                   },
-                );
-              },
+          ),
+        ],
+      ),
+      body: isLoading
+          ? const GroceryListSkeleton()
+          : errorMessage != null
+              ? ErrorRetryMessage(
+                  message: errorMessage!,
+                  onRetry: loadGroceryItems,
+                )
+              : Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          hintText: 'Search your grocery list',
+                          border: const OutlineInputBorder(),
+                          suffixIcon: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_searchController.text.isNotEmpty)
+                                IconButton(
+                                  icon: const Icon(Icons.close),
+                                  onPressed: clearSearch,
+                                ),
+                              IconButton(
+                                icon: const Icon(Icons.search),
+                                onPressed: searchGroceryList,
+                              ),
+                            ],
+                          ),
+                        ),
+                        onChanged: (value) {
+                          setState(() {});
+                        },
+                        onSubmitted: (value) {
+                          searchGroceryList();
+                        },
+                      ),
+                    ),
+                    Expanded(
+                      child: groceryItems.isEmpty
+                          ? const EmptyGroceryListMessage()
+                          : filteredItems.isEmpty && searchQuery.isNotEmpty
+                              ? const Center(
+                                  child: Text('No items match your search.'),
+                                )
+                              : ListView.builder(
+                                  itemCount: filteredItems.length,
+                                  itemBuilder: (context, index) {
+                                    final product = filteredItems[index];
+
+                                    return CheckboxListTile(
+                                      value: false,
+                                      title: Text(product.title),
+                                      subtitle: Text(
+                                        '\$${product.price.toStringAsFixed(2)}',
+                                      ),
+                                      secondary: Image.network(
+                                        product.thumbnail,
+                                        width: 50,
+                                        errorBuilder: (c, e, s) =>
+                                            const Icon(Icons.image),
+                                      ),
+                                      onChanged: (value) {
+                                        removeItem(product);
+                                      },
+                                    );
+                                  },
+                                ),
+                    ),
+                  ],
+                ),
+    );
+  }
+}
+
+class EmptyGroceryListMessage extends StatelessWidget {
+  const EmptyGroceryListMessage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Text(
+          'Welcome! Your grocery list is empty.\n\nGo back to the groceries page and tap + to add your first item.',
+          textAlign: TextAlign.center,
+        ),
+      ),
+    );
+  }
+}
+
+class ProductSkeleton extends StatelessWidget {
+  const ProductSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      itemCount: 8,
+      itemBuilder: (context, index) {
+        return const ListTile(
+          leading: CircleAvatar(
+            radius: 25,
+            backgroundColor: Colors.black12,
+          ),
+          title: SizedBox(
+            height: 16,
+            child: ColoredBox(
+              color: Colors.black12,
             ),
+          ),
+          subtitle: Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: SizedBox(
+              height: 12,
+              child: ColoredBox(
+                color: Colors.black12,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class GroceryListSkeleton extends StatelessWidget {
+  const GroceryListSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      itemCount: 6,
+      itemBuilder: (context, index) {
+        return const CheckboxListTile(
+          value: false,
+          onChanged: null,
+          title: SizedBox(
+            height: 16,
+            child: ColoredBox(
+              color: Colors.black12,
+            ),
+          ),
+          secondary: CircleAvatar(
+            radius: 25,
+            backgroundColor: Colors.black12,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class ErrorRetryMessage extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const ErrorRetryMessage({
+    super.key,
+    required this.message,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(message, textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Retry'),
+          ),
+        ],
+      ),
     );
   }
 }
