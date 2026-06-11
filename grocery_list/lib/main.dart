@@ -397,6 +397,23 @@ class _ProductListScreenState extends State<ProductListScreen> {
     });
   }
 
+  Future<void> refreshProducts() async {
+    setState(() {
+      _productsFuture = fetchProducts();
+    });
+
+    await _productsFuture;
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Products refreshed'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final selectedIds = savedItems.map((item) => item.id).toSet();
@@ -507,7 +524,9 @@ class _ProductListScreenState extends State<ProductListScreen> {
                   );
                 }
 
-                return ListView.builder(
+                return RefreshIndicator(
+                onRefresh: refreshProducts,
+                child: ListView.builder(
                 itemCount: availableProducts.length,
                 itemBuilder: (context, index) {
                 final product = availableProducts[index];
@@ -560,6 +579,7 @@ class _ProductListScreenState extends State<ProductListScreen> {
                   ),
                 );
                 },
+                ),
                 );
               },
             ),
@@ -723,6 +743,10 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
     });
   }
 
+  Future<void> refreshGroceryList() async {
+    await loadGroceryItems();
+  }
+
   @override
   Widget build(BuildContext context) {
     final filteredItems = groceryItems.where((product) {
@@ -836,7 +860,9 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
                                 ? const Center(
                                     child: Text('No items match your search.'),
                                   )
-                                : ListView.builder(
+                                : RefreshIndicator(
+                                    onRefresh: refreshGroceryList,
+                                    child: ListView.builder(
                                     itemCount: filteredItems.length,
                                     itemBuilder: (context, index) {
                                       final product = filteredItems[index];
@@ -896,6 +922,7 @@ class _GroceryListScreenState extends State<GroceryListScreen> {
                                       );
                                     },
                                   ),
+                                ),
                       ),
                     ],
                   ),
